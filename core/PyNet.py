@@ -51,8 +51,72 @@ class PyNet_template:
             except Exception:
                 eval_expression = ''
             content = content.replace(f'<!!{match}!!>', eval_expression)
-
-        return content
+        match_condition = re.findall(r'(<\?\?\s*[\S\s]*?\s*\?\?>)', content)
+        if match_condition:
+            check = [[True, True, False]]
+            count = 0
+            new_content = content
+            for index, condition_all in enumerate(match_condition):
+                condition = re.findall(r'<\?\?\s*([\S\s]*?)\s*\?\?>', content)
+                if len(match_condition) - 1 != index:
+                    condition_escaped = re.sub(r'[^a-zA-Z0-9 ]', r'\\\g<0>', match_condition[index])
+                    condition_escaped_next = re.sub(r'[^a-zA-Z0-9 ]', r'\\\g<0>', match_condition[index + 1])
+                    condition_content = re.findall(f'{condition_escaped}([\s\S]*?){condition_escaped_next}',
+                                                   content)[0]
+                else:
+                    condition_content = ''
+                if count >= 0:
+                    verb, expression = re.findall(r'^(\w*)\s*\(?([^()]*)\)?', condition[index])[0]
+                    if len(check) == 1 and verb != 'if':
+                        raise Exception(f'{file} template syntax has some errors.')
+                    if verb == 'if':
+                        if check[count][1]:
+                            try:
+                                res = eval(expression, args)
+                            except Exception as e:
+                                print(e)
+                                res = False
+                            if res:
+                                check.append([True, True, False])
+                                new_content = new_content.replace(condition_all + condition_content, condition_content,
+                                                                  1)
+                            else:
+                                check.append([True, False, False])
+                                new_content = new_content.replace(condition_all + condition_content, '', 1)
+                        else:
+                            check.append([True, None, False])
+                            new_content = new_content.replace(condition_all + condition_content, '', 1)
+                        count += 1
+                    elif verb == 'elif':
+                        if not check[count][1]:
+                            try:
+                                res = eval(expression, args)
+                            except Exception:
+                                res = False
+                            if res:
+                                check[count][2] = True
+                                new_content = new_content.replace(condition_all + condition_content, condition_content,
+                                                                  1)
+                            else:
+                                check[count][2] = False
+                                new_content = new_content.replace(condition_all + condition_content, '', 1)
+                        else:
+                            new_content = new_content.replace(condition_all + condition_content, '', 1)
+                    elif verb == 'else':
+                        if not check[count][1] and not check[count][2]:
+                            new_content = new_content.replace(condition_all + condition_content, condition_content, 1)
+                        else:
+                            new_content = new_content.replace(condition_all + condition_content, '', 1)
+                    elif verb == 'endif' and check[count][0]:
+                        check.pop()
+                        count -= 1
+                        new_content = new_content.replace(condition_all + condition_content, '', 1)
+                    else:
+                        raise Exception(f'{file} template syntax has some errors.')
+            if len(check) != 1:
+                raise Exception(f'{file} template syntax has some errors.')
+            else:
+                return new_content
 
 
 class PyNet:
