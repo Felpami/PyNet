@@ -34,7 +34,6 @@ def template(file, **args):
                 condition_escaped_next = re.sub(r'[^a-zA-Z0-9 ]', r'\\\g<0>', match_condition[index + 1])
                 condition_content = re.findall(f'{condition_escaped}([\s\S]*?){condition_escaped_next}',
                                                new_content)[0]
-                print({index: match_condition[index] + match_condition[index + 1] + '<TEST>' + condition_content})
             else:
                 condition_content = ''
             if count >= 0:
@@ -85,13 +84,10 @@ def template(file, **args):
                     else:
                         new_content = new_content.replace(condition_all + condition_content, '', 1)
                 else:
-                    print(count)
                     raise Exception(f'{file} template syntax has some errors.')
         if len(check) != 1:
-            print(count)
             raise Exception(f'{file} template syntax has some errors.')
         else:
-            print(count)
             return new_content
 
 class PyNet_session:
