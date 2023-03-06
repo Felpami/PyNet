@@ -27,7 +27,6 @@ def peppa(request, response):
         response.set_cookie('lang', 'en_US')
     #response.session['test'] = 'HEHE'
     #request.post['test']
-    #username = request.session.get('usernamme') #__import__('os').popen('whoami').read()
     return template.template('index.html', username=username)
 
 
