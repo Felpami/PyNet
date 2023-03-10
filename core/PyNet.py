@@ -89,6 +89,8 @@ def template(file, **args):
             raise Exception(f'{file} template syntax has some errors.')
         else:
             return new_content
+    else:
+        return content
 
 class PyNet_session:
     def __init__(self, secret, name='PyNetSESSION'):
@@ -129,6 +131,7 @@ class PyNet:
         request = self.Requester(self, req, addr, self.endpoint_dict)
         response = self.Responder(self, request.verb, request.protocol)
         if request.exit_code:
+            self.server_warning(f'Received request [{request.exit_code}] {request.verb} {request.endpoint} {request.protocol} from {addr}')
             response.set_code(request.exit_code)
             resp = response.return_response()
             del request
@@ -186,6 +189,7 @@ class PyNet:
         sock.bind((self.address, self.port))
         self.server_success(f'Server started on {self.address}:{self.port}')
         sock.listen()
+        count = 0
         while True:
             try:
                 conn, addr = sock.accept()
@@ -194,12 +198,13 @@ class PyNet:
                 self.server_error(f'Error serving request.')
             else:
                 try:
-                    threading.Thread(target=self.run_thread, args=(conn, addr,), daemon=True).start()
+                    threading.Thread(target=self.run_thread, args=(conn, addr, count, ), daemon=True).start()
+                    count += 1
                 except KeyboardInterrupt:
                     sock.close()
                     self.server_success(f'Quitting server! (~^w^)~')
 
-    def run_thread(self, conn, addr):
+    def run_thread(self, conn, addr, count):
         with conn:
             req = b''
             while True:
@@ -207,9 +212,10 @@ class PyNet:
                 req += temp
                 if len(temp) < 1024:
                     break
-            resp = self.handle_request(addr, req)
-            self.server_success_send(f'Sending response to {addr}')
-            conn.sendall(resp)
+            if len(req):
+                resp = self.handle_request(addr, req)
+                self.server_success_send(f'Sending response to {addr}')
+                conn.sendall(resp)
 
     def get_time(self):
         return f'[{datetime.strftime(datetime.now(), "%H:%M:%S:%f")}]'
@@ -262,7 +268,7 @@ class PyNet:
         def __init__(self, pynet, verb, protocol):
             self.body = b''
             self.pynet = pynet
-            self.headers = {'Server': 'FelpaServer\\v.0.1'}
+            self.headers = {'Server': 'PyNet\\v.0.1.2'}
             self.headers_string = ''
             self.code_dict = {200: 'OK', 300: 'Multiple Choices', 301: 'Moved Permanently', 302: 'Found',
                               304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
@@ -360,11 +366,11 @@ class PyNet:
 
         def parser(self):
             header_lookfor = ['Content-Type']
-            top, *body = list(filter(None, self.request.decode().split('\r\n\r\n', 1)))
             try:
+                top, *body = list(filter(None, self.request.decode().split('\r\n\r\n', 1)))
                 self.verb, url, self.protocol = re.findall(r'^([A-Z]*)[^\S\r\n]*(\/\S*)[^\S\r\n]*(HTTP\/[0-9]\.[0-9])', top.split('\r\n')[0])[0]
             except Exception:
-                return 1
+                return 400
             self.endpoint, *query_temp = url.split('?', 1)
             if len(query_temp):
                 match = re.findall('([^\r\n\t\f\v &]*?)=([^\r\n\t\f\v &]*?)(?=&|$)', query_temp[0])
