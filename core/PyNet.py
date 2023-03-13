@@ -6,7 +6,10 @@ import base64
 import json
 import re
 import sqlite3
-from datetime import datetime
+import uuid
+import hashlib
+import time
+import datetime
 from colorama import Fore, Back
 from Crypto import Random
 from Crypto.Cipher import AES
@@ -125,12 +128,28 @@ class PyNet:
         self.endpoint_defined = {}
         self.endpoint_dict = {}
         self.sock = None
-        self.session_manager = None
+        self.session_name = 'PyNetSESSION'
+        self.session_duration = 1
+        self.__session_manager_create()
+
+
+    def __session_manager_create(self):
+        conn = sqlite3.connect('sessions.db')
+        cur = conn.cursor()
+        columns = cur.execute('PRAGMA table_info("sessions")').fetchall()
+        if columns:
+            if columns[0][1] != 'ID' or columns[1][1] != 'VALUE':
+                cur.execute('CREATE TABLE sessions(ID TEXT PRIMARY KEY NOT NULL, VALUE TEXT NOT NULL, DATE_VALID TEXT NOT NULL);')
+                conn.commit()
+        else:
+            cur.execute('CREATE TABLE sessions(ID TEXT PRIMARY KEY NOT NULL, VALUE TEXT NOT NULL, DATE_VALID TEXT NOT NULL);')
+            conn.commit()
+        conn.close()
 
     def handle_request(self, addr, req):
         self.list_file_in_static()
         request = self.Requester(self, req, addr, self.endpoint_dict)
-        response = self.Responder(self, request.verb, request.protocol)
+        response = self.Responder(self, request)
         if request.exit_code:
             if request.verb and request.endpoint and request.protocol:
                 self.server_warning(f'Received request [{request.exit_code}] {request.verb} {request.endpoint} {request.protocol} from {addr[0]}')
@@ -185,10 +204,10 @@ class PyNet:
         return set_func
 
     def serve(self):
-        if self.session_manager is None:
-            self.server_warning(f'Using deafult session manager.')
-            self.session_manager = PyNet_session('SECRET')
-            self.server_warning(f'Consider creating a custom session manager -> PyNet_session("{{KEY}}")')
+        #if self.session_manager is None:
+        #    self.server_warning(f'Using deafult session manager.')
+        #    self.session_manager = PyNet_session('SECRET')
+        #    self.server_warning(f'Consider creating a custom session manager -> PyNet_session("{{KEY}}")')
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
         self.sock = sock
@@ -224,7 +243,7 @@ class PyNet:
                 conn.sendall(resp)
 
     def get_time(self):
-        return f'[{datetime.strftime(datetime.now(), "%H:%M:%S:%f")}]'
+        return f'[{datetime.datetime.strftime(datetime.datetime.now(), "%H:%M:%S:%f")}]'
 
     def server_success_send(self, text):
         print('[' + Fore.CYAN + '+' + Fore.RESET + f'] {self.get_time()} {text}')
@@ -271,9 +290,10 @@ class PyNet:
                 return response.return_response()
 
     class Responder:
-        def __init__(self, pynet, verb, protocol):
+        def __init__(self, pynet, request):
             self.body = b''
             self.pynet = pynet
+            self.request = request
             self.headers = {'Server': 'PyNet\\v.0.1.2'}
             self.headers_string = ''
             self.code_dict = {200: 'OK', 300: 'Multiple Choices', 301: 'Moved Permanently', 302: 'Found',
@@ -282,9 +302,9 @@ class PyNet:
                               405: 'Method Not Allowed', 500: 'Internal Server Error'}
             self.allowed_methods = ['GET', 'OPTIONS']
             self.code = 200
-            self.verb = verb
+            self.verb = request.verb
             self.session = {}
-            self.protocol = self.set_protocol(protocol)
+            self.protocol = self.set_protocol(request.protocol)
             self.concatenate_header()
 
         def set_protocol(self, protocol):
@@ -301,10 +321,44 @@ class PyNet:
                 self.set_header('Allow', ','.join(self.allowed_methods))
                 self.body = b''
             if len(self.session):
-                #self.set_header('Set-Cookie', self.pynet.session_manager.name+'='+self.pynet.session_manager.enc((str(self.session)).replace('\'', '"')))
-                enc_cookie = self.pynet.session_manager.enc((str(self.session)).replace('\'', '"'))
-                if enc_cookie:
-                    self.set_cookie(self.pynet.session_manager.name, enc_cookie , http_only=True)
+                conn = sqlite3.connect('sessions.db')
+                cur = conn.cursor()
+                #enc_cookie = self.pynet.session_manager.enc((str(self.session)).replace('\'', '"'))
+                #if enc_cookie:
+                #    self.set_cookie(self.pynet.session_manager.name, enc_cookie , http_only=True)
+                value = json.dumps(self.session)
+                date_valid = (datetime.datetime.now() + datetime.timedelta(hours=self.pynet.session_duration)).strftime("%Y/%m/%d-%H:%M:%S")
+                if self.request.session_id is None:
+                    while True:
+                        #id = hashlib.sha256(str(time.time()).encode()).hexdigest()
+                        id = str(uuid.uuid4())
+                        check_id = cur.execute('SELECT VALUE FROM sessions WHERE ID=?', (str(id), )).fetchone()
+                        if check_id is None:
+                            cur.execute('INSERT INTO sessions(ID, VALUE, DATE_VALID) values (?, ?, ?)', (str(id), value, date_valid))
+                            conn.commit()
+                            self.set_cookie(self.pynet.session_name, id, http_only=True)
+                            break
+                else:
+                    result_match = cur.execute('SELECT VALUE FROM sessions WHERE ID=?', (self.request.session_id, )).fetchone()
+                    if result_match is not None:
+                        value = json.loads(result_match[0])
+                        value.update(self.session)
+                        new_value = json.dumps(value)
+                        cur.execute('UPDATE sessions SET VALUE=?, DATE_VALID=? WHERE ID=?', (new_value, date_valid, self.request.session_id))
+                        conn.commit()
+                    else:
+                        while True:
+                            #id = hashlib.sha256(str(time.time()).encode()).hexdigest()
+                            id = str(uuid.uuid4())
+                            check_id = cur.execute('SELECT VALUE FROM sessions WHERE ID=?', (str(id),)).fetchone()
+                            if check_id is None:
+                                cur.execute('INSERT INTO sessions(ID, VALUE, DATE_VALID) values (?, ?, ?)',
+                                            (str(id), value, date_valid))
+                                conn.commit()
+                                self.set_cookie(self.pynet.session_name, id, http_only=True)
+                                break
+                cur.close()
+                conn.close()
             self.set_header('Content-Length', f'{len(self.body)}')
             self.concatenate_header()
             return top.encode("latin-1")+self.headers_string.encode("latin-1")+b'\r\n'+self.body
@@ -315,7 +369,6 @@ class PyNet:
             else:
                 for key in self.headers:
                     self.headers_string += f'{key}: {self.headers[key]}\r\n'
-                    #print(self.headers_string)
                 self.headers = {}
 
         def set_code(self, code):
@@ -360,6 +413,7 @@ class PyNet:
             self.protocol = None
             self.request_headers = {}
             self.session = {}
+            self.session_id = None
             self.exit_code = self.handle()
 
         def request_headers_convert(self, array):
@@ -397,10 +451,24 @@ class PyNet:
             if cookies:
                 match = re.findall(r'([^\r\n\t\f\v &]*?)=([^\r\n\t\f\v ]*?)(?= |;|$)', cookies.strip())
                 for key, value in match:
-                    if key == self.pynet.session_manager.name:
-                        dec_cookie = self.pynet.session_manager.dec(value)
-                        if dec_cookie:
-                            self.session = dec_cookie
+                    if key == self.pynet.session_name:
+                        #dec_cookie = self.pynet.session_manager.dec(value)
+                        #if dec_cookie:
+                        #    self.session = dec_cookie
+                        conn = sqlite3.connect('sessions.db')
+                        cur = conn.cursor()
+                        check_query = cur.execute('SELECT VALUE, DATE_VALID FROM sessions WHERE ID=?', (value, )).fetchone()
+                        if check_query is not None:
+                            check_session_value, check_session_date = check_query
+                            if datetime.datetime.strptime(check_session_date,
+                                                          '%Y/%m/%d-%H:%M:%S') > datetime.datetime.now():
+                                self.session_id = value
+                                self.session = json.loads(check_session_value)
+                            else:
+                                cur.execute('DELETE FROM sessions WHERE ID=?', (value, ))
+                                conn.commit()
+                        cur.close()
+                        conn.close()
                     else:
                         self.cookie[key] = value
             array = self.request_headers.get('Content-Type')
